@@ -1,5 +1,6 @@
 /build/
 /.vs/
+/.claude/settings.local.json
 *.user
 
 /third_party/cef/

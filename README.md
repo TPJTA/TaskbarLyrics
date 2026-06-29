@@ -199,20 +199,32 @@ build\Release\msimg32.dll
 
 仓库中的 [Release 工作流](./.github/workflows/release.yml) 会在推送 `v*` 标签时自动完成构建、测试、打包和 GitHub Release 创建。
 
-例如发布 `0.1.0`：
+推荐使用发布脚本。它会同步 CMake 和安装清单版本、执行干净构建与测试、创建提交和标签，然后推送到远端：
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+.\scripts\release.ps1 -Version 1.0.0 -Publish
 ```
 
-标签、`CMakeLists.txt` 和 `scripts/install.ps1` 中的版本必须一致。带后缀的标签（例如 `v0.1.0-beta.1`）会创建为预发布版本。
+发布前工作区必须没有未提交的更改。如果只想在本地更新版本并验证构建，不提交也不推送：
+
+```powershell
+.\scripts\release.ps1 -Version 1.0.0
+```
+
+也可以手动发布：
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+手动发布时，标签、`CMakeLists.txt` 和 `scripts/install.ps1` 中的版本必须一致。带后缀的标签（例如 `v1.0.0-beta.1`）会创建为预发布版本。
 
 Release 包含：
 
 ```text
-TaskbarLyrics-v0.1.0-win-x64.zip
-TaskbarLyrics-v0.1.0-win-x64.zip.sha256
+TaskbarLyrics-v1.0.0-win-x64.zip
+TaskbarLyrics-v1.0.0-win-x64.zip.sha256
 ```
 
 ## 项目结构

@@ -96,6 +96,8 @@ ctest --test-dir build -C Release --output-on-failure
 
 `.github/workflows/release.yml` 会拒绝版本不一致的标签。`v0.2.0-beta.1` 之类的标签允许使用同一基础版本，并会发布为 Pre-release。
 
+优先使用 `.\scripts\release.ps1 -Version <version> -Publish` 完成版本同步、构建、提交、打标签和推送。该命令要求干净工作区；不要绕过它的工作区或标签检查。
+
 不要手工提交构建产物来替代 Release 工作流。
 
 ## 文档维护
