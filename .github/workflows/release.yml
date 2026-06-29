@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "Release tag must use the format v1.2.3 or v1.2.3-preview.1: $tag"
+          }
+          $tagVersion = $Matches['version']
+
+          $cmake = Get-Content -LiteralPath CMakeLists.txt -Raw
+          if ($cmake -notmatch 'project\(TaskbarLyrics VERSION (?<version>\d+\.\d+\.\d+)') {
+            throw 'Could not read the project version from CMakeLists.txt.'
+          }
+          $cmakeVersion = $Matches['version']
+
+          $baseTagVersion = $tagVersion.Split('-')[0]
+          if ($baseTagVersion -ne $cmakeVersion) {
+            throw "Tag version $tagVersion does not match CMake project version $cmakeVersion."
+          }
+
+          $installer = Get-Content -LiteralPath scripts/install.ps1 -Raw
+          if ($installer -notmatch "version = '(?<version>\d+\.\d+\.\d+)'") {
+            throw 'Could not read the package version from scripts/install.ps1.'
+          }
+          $installerVersion = $Matches['version']
+          if ($baseTagVersion -ne $installerVersion) {
+            throw "Tag version $tagVersion does not match installer version $installerVersion."
+          }
+
+      - name: Build and test
+        shell: pwsh
+        run: ./scripts/build.ps1 -Configuration Release -Clean
+
+      - name: Package release
+        id: package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $packageName = "TaskbarLyrics-$tag"
+          $stagingRoot = Join-Path $env:RUNNER_TEMP 'release'
+          $packageRoot = Join-Path $stagingRoot $packageName
+          $binaryRoot = Join-Path $packageRoot 'build\Release'
+          $scriptsRoot = Join-Path $packageRoot 'scripts'
+
+          New-Item -ItemType Directory -Path $binaryRoot, $scriptsRoot -Force | Out-Null
+          Copy-Item -LiteralPath 'build\Release\msimg32.dll' -Destination $binaryRoot
+          Copy-Item -LiteralPath 'scripts\common.ps1' -Destination $scriptsRoot
+          Copy-Item -LiteralPath 'scripts\install.ps1' -Destination $scriptsRoot
+          Copy-Item -LiteralPath 'scripts\uninstall.ps1' -Destination $scriptsRoot
+          Copy-Item -LiteralPath 'README.md' -Destination $packageRoot
+          Copy-Item -LiteralPath 'third_party\cef\LICENSE.txt' `
+            -Destination (Join-Path $packageRoot 'CEF-LICENSE.txt')
+
+          $archive = Join-Path $env:RUNNER_TEMP "$packageName-win-x64.zip"
+          Compress-Archive -LiteralPath $packageRoot -DestinationPath $archive -CompressionLevel Optimal
+
+          $checksum = Get-FileHash -LiteralPath $archive -Algorithm SHA256
+          $checksumPath = "$archive.sha256"
+          "$($checksum.Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($archive))" |
+            Set-Content -LiteralPath $checksumPath -Encoding ascii
+
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+          "checksum=$checksumPath" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
+        run: |
+          $arguments = @(
+            'release', 'create', '${{ github.ref_name }}',
+            $env:ARCHIVE,
+            $env:CHECKSUM,
+            '--verify-tag',
+            '--generate-notes',
+            '--title', 'Taskbar Lyrics ${{ github.ref_name }}'
+          )
+
+          if ('${{ github.ref_name }}' -match '-') {
+            $arguments += '--prerelease'
+          }
+
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release creation failed with exit code $LASTEXITCODE."
+          }

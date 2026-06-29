@@ -1,0 +1,9 @@
+LIBRARY "msimg32"
+
+EXPORTS
+    vSetDdrawflag=TaskbarLyrics_vSetDdrawflag @1
+    AlphaBlend=TaskbarLyrics_AlphaBlend @2
+    DllInitialize=TaskbarLyrics_DllInitialize @3
+    GradientFill=TaskbarLyrics_GradientFill @4
+    TransparentBlt=TaskbarLyrics_TransparentBlt @5
+
