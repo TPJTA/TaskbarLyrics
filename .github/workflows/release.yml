@@ -67,7 +67,7 @@ jobs:
           Copy-Item -LiteralPath 'scripts\install.ps1' -Destination $scriptsRoot
           Copy-Item -LiteralPath 'scripts\uninstall.ps1' -Destination $scriptsRoot
           Copy-Item -LiteralPath 'README.md' -Destination $packageRoot
-          Copy-Item -LiteralPath 'third_party\cef\LICENSE.txt' `
+          Copy-Item -LiteralPath 'third_party\CEF-LICENSE.txt' `
             -Destination (Join-Path $packageRoot 'CEF-LICENSE.txt')
 
           $archive = Join-Path $env:RUNNER_TEMP "$packageName-win-x64.zip"

@@ -261,4 +261,4 @@ Taskbar Lyrics 使用 DLL 代理以及网易云音乐未公开的内部接口，
 
 本项目与网易、网易云音乐没有隶属或授权关系。“网易云音乐”及相关商标归其权利人所有。
 
-CEF 相关文件遵循 [third_party/cef/LICENSE.txt](./third_party/cef/LICENSE.txt) 中的许可证。仓库目前未提供项目自身的开源许可证；如需分发、修改或二次使用，请先向项目维护者确认授权范围。
+CEF 相关文件遵循 [third_party/CEF-LICENSE.txt](./third_party/CEF-LICENSE.txt) 中的许可证。仓库目前未提供项目自身的开源许可证；如需分发、修改或二次使用，请先向项目维护者确认授权范围。
