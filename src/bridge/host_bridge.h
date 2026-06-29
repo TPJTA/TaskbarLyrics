@@ -20,6 +20,8 @@ struct HostSnapshot {
     bool playback_state_known = false;
     bool playing = false;
     bool has_track = false;
+    bool has_previous = false;
+    bool has_next = false;
     std::wstring song_id;
     std::wstring line_key;
     std::wstring primary;

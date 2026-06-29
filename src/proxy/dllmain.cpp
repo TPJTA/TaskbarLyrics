@@ -75,6 +75,12 @@ extern "C" void WINAPI TaskbarLyrics_vSetDdrawflag() {}
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void*) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
+        // Install the CEF browser-creation IAT hooks as early as possible:
+        // they must be in place BEFORE the host calls cef_browser_host_create_
+        // browser(_sync), which happens during host startup, typically before
+        // the first AlphaBlend that drives ScheduleBootstrap. IAT patching is
+        // loader-lock safe (no LoadLibrary, no thread creation). BootstrapThread
+        // additionally retries this if cloudmusic.dll was not yet mapped here.
         taskbar_lyrics::InstallCefProbeHooks();
     }
     return TRUE;

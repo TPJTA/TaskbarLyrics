@@ -43,8 +43,13 @@ RECT Expanded(const RECT& rectangle, int padding, const RECT& limit) {
 }  // namespace
 
 TaskbarLayout::~TaskbarLayout() {
+    ReleaseAutomation();
+}
+
+void TaskbarLayout::ReleaseAutomation() {
     if (automation_ != nullptr) {
         automation_->Release();
+        automation_ = nullptr;
     }
 }
 
