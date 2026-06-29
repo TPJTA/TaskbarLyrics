@@ -365,10 +365,11 @@ constexpr wchar_t bridge_script[] = LR"JS(
       hasNext ? "1" : "0"
     ].join("|");
   } catch (error) {
-    // Swallow: only a frame that successfully read the player store should
-    // publish. A genuine lyric-load failure is surfaced by the host-side
-    // loading timeout, rather than letting an arbitrary frame post "failed"
-    // and stomp the real player's snapshot.
+    // Surface a hard failure so a broken bridge is visible rather than stuck
+    // silently on "loading". Frames with no player store already returned above
+    // (the main anti-stomp guard), so reaching here means the player frame
+    // itself threw.
+    document.title = "__TASKBAR_LYRICS_V1__|failed|0|0|0|||5000||";
   }
 })();
 )JS";
