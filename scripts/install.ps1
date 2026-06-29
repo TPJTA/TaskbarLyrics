@@ -72,7 +72,7 @@ Move-Item -LiteralPath $TemporaryDll -Destination $DestinationDll
 $InstalledHash = (Get-FileHash -LiteralPath $DestinationDll -Algorithm SHA256).Hash
 $InstallManifest = [ordered]@{
     product = 'TaskbarLyrics'
-    version = '0.1.0'
+    version = '1.0.0'
     clientVersion = $ClientVersion
     installedAtUtc = [DateTime]::UtcNow.ToString('o')
     installedFile = 'msimg32.dll'
