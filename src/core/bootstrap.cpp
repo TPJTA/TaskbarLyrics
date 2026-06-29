@@ -45,8 +45,19 @@ DWORD WINAPI BootstrapThread(void*) {
     }
 
     LogInfo(L"Taskbar Lyrics bootstrap started in: " + process_path);
+
+    // Install the CEF browser-creation probe hooks here (outside DllMain's
+    // loader lock). cloudmusic.dll may still be loading when the proxy attaches,
+    // so retry briefly until the host module is mapped and the IAT patch lands.
+    bool hooks_installed = false;
+    for (int attempt = 0; attempt < 50 && !hooks_installed; ++attempt) {
+        hooks_installed = InstallCefProbeHooks();
+        if (!hooks_installed) {
+            Sleep(100);
+        }
+    }
     LogInfo(
-        CefProbeHooksInstalled()
+        hooks_installed
             ? L"CEF browser-creation probe hooks installed."
             : L"CEF browser-creation probe hooks were not installed.");
     LyricWindow lyric_window;

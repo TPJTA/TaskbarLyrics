@@ -1,5 +1,4 @@
 #include "core/bootstrap.h"
-#include "bridge/cef_probe.h"
 
 #include <windows.h>
 
@@ -75,7 +74,10 @@ extern "C" void WINAPI TaskbarLyrics_vSetDdrawflag() {}
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void*) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(instance);
-        taskbar_lyrics::InstallCefProbeHooks();
+        // CEF probe-hook installation (IAT patching, which depends on
+        // cloudmusic.dll already being mapped) is deferred to the bootstrap
+        // thread rather than run here under the loader lock; see ADR 0004 and
+        // BootstrapThread, which retries until the host module is present.
     }
     return TRUE;
 }

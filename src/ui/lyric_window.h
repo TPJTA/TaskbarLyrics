@@ -8,6 +8,7 @@
 #include <gdiplus.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace taskbar_lyrics {
@@ -34,10 +35,13 @@ private:
     void RefreshPlacement();
     void UpdateVisibility();
     void ReassertTopmost();
+    void EnsureReorderHook();
     void RefreshHostState();
     void Render();
     void ShowContextMenu(POINT screen_point);
     bool UsesLightTaskbar() const;
+    void RefreshThemeCache();
+    Gdiplus::Font& EnsureFont(UINT dpi);
     double ScrollElapsedMilliseconds() const;
 
     // Shared by both WinEvent hooks below: on any relevant z-order change it
@@ -65,13 +69,27 @@ private:
     Config config_;
     ULONG_PTR gdiplus_token_ = 0;
 
+    // Cached so Render() (which runs up to ~30x/s while a line scrolls) does not
+    // do a registry read and rebuild GDI+ fonts every frame. The theme flag is
+    // refreshed on WM_SETTINGCHANGE/WM_THEMECHANGED; the font is rebuilt only
+    // when the taskbar DPI changes. The family must outlive the font.
+    bool cached_light_taskbar_ = false;
+    std::unique_ptr<Gdiplus::FontFamily> cached_font_family_;
+    std::unique_ptr<Gdiplus::Font> cached_font_;
+    UINT cached_font_dpi_ = 0;
+
     // Visibility state machine (see UpdateVisibility). The window stays at its
     // last known gap when a layout query transiently finds none, and the
     // shown/hidden flip is debounced so a maximizing app cannot flicker it.
     bool have_placement_ = false;
     int gap_miss_streak_ = 0;
     bool shown_ = false;
-    int visibility_streak_ = 0;
+    // Time-based debounce for the show/hide flip (see UpdateVisibility): a
+    // candidate visibility must hold for visibility_debounce_ms of wall-clock
+    // time, independent of how often UpdateVisibility is called.
+    bool visibility_change_pending_ = false;
+    bool visibility_pending_target_ = false;
+    ULONGLONG visibility_pending_since_ = 0;
     RECT applied_rect_{};
     // While the context menu is up (and briefly after), keep the lyrics shown:
     // forcing the window foreground for the menu perturbs the host's foreground

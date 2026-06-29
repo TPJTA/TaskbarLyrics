@@ -31,10 +31,13 @@ constexpr UINT animation_timer_interval_ms = 33;
 // us within ~16 ms (a single cheap SetWindowPos), so any flash is sub-frame.
 constexpr UINT reassert_timer_interval_ms = 16;
 constexpr ULONGLONG loading_failure_timeout_ms = 8000;
-// Consecutive 100 ms ticks the desired visibility must hold before it is
-// applied, so a transient blip while an app maximizes cannot flicker the
-// lyrics (and true fullscreen still hides within ~300 ms).
-constexpr int visibility_debounce_ticks = 3;
+// The desired visibility must hold for this long before it is applied, so a
+// transient blip while an app maximizes cannot flicker the lyrics (and true
+// fullscreen still hides within this window). Time-based rather than tick-based
+// because UpdateVisibility is driven from several timers/events at different
+// cadences (100 ms host-state, 750 ms layout, and bursty WM_SETTINGCHANGE /
+// WM_DISPLAYCHANGE messages), so a fixed consecutive-tick count is meaningless.
+constexpr ULONGLONG visibility_debounce_ms = 300;
 // Consecutive failed layout queries (at 750 ms each) before the lyrics hide for
 // a genuinely missing taskbar gap, as opposed to a one-frame query miss.
 constexpr int gap_miss_threshold = 2;
@@ -139,6 +142,7 @@ int LyricWindow::Run() {
     LogInfo(L"Lyric window message loop started.");
     line_started_at_ = GetTickCount64();
     loading_started_at_ = line_started_at_;
+    RefreshThemeCache();
     RefreshPlacement();
 
     MSG message{};
@@ -147,6 +151,15 @@ int LyricWindow::Run() {
         DispatchMessageW(&message);
     }
 
+    // Release the UI Automation interface while this thread's COM apartment is
+    // still alive; the TaskbarLayout destructor would otherwise run after
+    // CoUninitialize and release it into a torn-down apartment.
+    taskbar_layout_.ReleaseAutomation();
+    // Destroy cached GDI+ objects before GDI+ itself is shut down; they are
+    // members that would otherwise be released when this LyricWindow is
+    // destroyed, which happens after GdiplusShutdown.
+    cached_font_.reset();
+    cached_font_family_.reset();
     Gdiplus::GdiplusShutdown(gdiplus_token_);
     if (uninitialize_com) {
         CoUninitialize();
@@ -208,18 +221,9 @@ bool LyricWindow::Create() {
     // Clicking the taskbar restacks it above us but does NOT change the
     // foreground window, so the hook above never fires for it. Scope a second
     // hook to explorer (the taskbar's process) and react to its z-order reorder.
-    DWORD taskbar_pid = 0;
-    if (HWND taskbar = FindWindowW(L"Shell_TrayWnd", nullptr)) {
-        GetWindowThreadProcessId(taskbar, &taskbar_pid);
-    }
-    reorder_hook_ = SetWinEventHook(
-        EVENT_OBJECT_REORDER,
-        EVENT_OBJECT_REORDER,
-        nullptr,
-        &LyricWindow::ZOrderEventProc,
-        taskbar_pid,
-        0,
-        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    // If the taskbar isn't present yet (explorer restarting / slow shell init)
+    // this is retried from RefreshPlacement rather than installed process-wide.
+    EnsureReorderHook();
 
     SetTimer(window_, layout_timer_id, layout_timer_interval_ms, nullptr);
     SetTimer(
@@ -246,6 +250,33 @@ void CALLBACK LyricWindow::ZOrderEventProc(
     if (self != nullptr) {
         self->ReassertTopmost();
     }
+}
+
+void LyricWindow::EnsureReorderHook() {
+    // Scope the EVENT_OBJECT_REORDER hook to the taskbar's process only. Passing
+    // idProcess == 0 to SetWinEventHook would install a desktop-wide hook that
+    // fires ReassertTopmost for every reorder in every process, so install it
+    // only once the taskbar window (and thus its PID) is actually available.
+    if (reorder_hook_ != nullptr) {
+        return;
+    }
+    HWND taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (taskbar == nullptr) {
+        return;
+    }
+    DWORD taskbar_pid = 0;
+    GetWindowThreadProcessId(taskbar, &taskbar_pid);
+    if (taskbar_pid == 0) {
+        return;
+    }
+    reorder_hook_ = SetWinEventHook(
+        EVENT_OBJECT_REORDER,
+        EVENT_OBJECT_REORDER,
+        nullptr,
+        &LyricWindow::ZOrderEventProc,
+        taskbar_pid,
+        0,
+        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 }
 
 void LyricWindow::ReassertTopmost() {
@@ -316,7 +347,9 @@ LRESULT LyricWindow::HandleMessage(
         case WM_SETTINGCHANGE:
         case WM_THEMECHANGED:
         case WM_DPICHANGED:
+            RefreshThemeCache();
             RefreshPlacement();
+            Render();
             return 0;
 
         case WM_PAINT: {
@@ -386,6 +419,7 @@ void LyricWindow::RefreshPlacement() {
     // by UpdateVisibility. A transient query miss (e.g. the taskbar reflowing
     // while an app maximizes) keeps the last placement instead of hiding, which
     // is what used to flicker.
+    EnsureReorderHook();  // No-op once installed; retries if the taskbar appeared late.
     TaskbarPlacement next{};
     if (taskbar_layout_.Query(window_, next) && next.visible) {
         const bool changed =
@@ -410,25 +444,32 @@ void LyricWindow::RefreshPlacement() {
 }
 
 void LyricWindow::UpdateVisibility() {
+    const ULONGLONG now = GetTickCount64();
     const bool fullscreen = taskbar_layout_.ForegroundIsFullScreen(window_);
     bool desired = content_visible_ && have_placement_ && !fullscreen;
 
     // Hold the lyrics shown through a context-menu interaction so the menu's
     // foreground steal cannot blink them off.
-    if (shown_ && GetTickCount64() < suppress_hide_until_) {
+    if (shown_ && now < suppress_hide_until_) {
         desired = true;
     }
 
-    // Debounce the flip: the desired state must hold for a few ticks before it
-    // is applied, so brief blips while an app maximizes/restores cannot flicker
-    // the lyrics. A stable change (e.g. entering fullscreen) still applies.
+    // Debounce the flip: the desired state must hold for visibility_debounce_ms
+    // before it is applied, so brief blips while an app maximizes/restores
+    // cannot flicker the lyrics. A stable change (e.g. entering fullscreen)
+    // still applies. The timer is wall-clock based so it behaves the same no
+    // matter which timer/event drove this call.
     if (desired != shown_) {
-        if (++visibility_streak_ >= visibility_debounce_ticks) {
+        if (!visibility_change_pending_ || visibility_pending_target_ != desired) {
+            visibility_change_pending_ = true;
+            visibility_pending_target_ = desired;
+            visibility_pending_since_ = now;
+        } else if (now - visibility_pending_since_ >= visibility_debounce_ms) {
             shown_ = desired;
-            visibility_streak_ = 0;
+            visibility_change_pending_ = false;
         }
     } else {
-        visibility_streak_ = 0;
+        visibility_change_pending_ = false;
     }
 
     if (!shown_) {
@@ -478,8 +519,8 @@ void LyricWindow::RefreshHostState() {
 
     playback_state_known_ = host.playback_state_known;
     playing_ = host.playing;
-    previous_available_ = host.has_track;
-    next_available_ = host.has_track;
+    previous_available_ = host.has_previous;
+    next_available_ = host.has_next;
     line_duration_ms_ = host.line_duration_ms;
 
     switch (host.status) {
@@ -584,6 +625,25 @@ bool LyricWindow::UsesLightTaskbar() const {
     return status == ERROR_SUCCESS && value != 0;
 }
 
+void LyricWindow::RefreshThemeCache() {
+    cached_light_taskbar_ = UsesLightTaskbar();
+}
+
+Gdiplus::Font& LyricWindow::EnsureFont(UINT dpi) {
+    if (!cached_font_ || cached_font_dpi_ != dpi) {
+        const float size = 14.0F * (static_cast<float>(dpi) / 96.0F);
+        cached_font_family_ =
+            std::make_unique<Gdiplus::FontFamily>(PreferredFontName());
+        cached_font_ = std::make_unique<Gdiplus::Font>(
+            cached_font_family_.get(),
+            size,
+            Gdiplus::FontStyleRegular,
+            Gdiplus::UnitPixel);
+        cached_font_dpi_ = dpi;
+    }
+    return *cached_font_;
+}
+
 void LyricWindow::Render() {
     if (!placement_.visible || window_ == nullptr || !IsWindowVisible(window_)) {
         return;
@@ -595,7 +655,7 @@ void LyricWindow::Render() {
         return;
     }
 
-    const bool light = UsesLightTaskbar();
+    const bool light = cached_light_taskbar_;
 
     HDC screen = GetDC(nullptr);
     HDC memory = CreateCompatibleDC(screen);
@@ -643,19 +703,13 @@ void LyricWindow::Render() {
             !secondary_text_.empty();
         const float dpi_scale =
             static_cast<float>(placement_.dpi) / 96.0F;
-        const float lyric_font_size = 14.0F * dpi_scale;
-        const float primary_size = lyric_font_size;
-        const float secondary_size = lyric_font_size;
 
-        Gdiplus::FontFamily family(PreferredFontName());
-        Gdiplus::Font primary_font(
-            &family, primary_size, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        Gdiplus::Font secondary_font(
-            &family, secondary_size, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+        // Primary and secondary lines share one DPI-keyed cached font.
+        Gdiplus::Font& lyric_font = EnsureFont(placement_.dpi);
 
-        const float primary_height = primary_font.GetHeight(&graphics);
+        const float primary_height = lyric_font.GetHeight(&graphics);
         const float secondary_height =
-            use_secondary ? secondary_font.GetHeight(&graphics) : 0.0F;
+            use_secondary ? lyric_font.GetHeight(&graphics) : 0.0F;
         const float line_gap = use_secondary ? std::max(0.0F, height * 0.01F) : 0.0F;
         const float block_height = primary_height + secondary_height + line_gap;
         const float top = std::max(0.0F, (height - block_height) / 2.0F);
@@ -715,11 +769,11 @@ void LyricWindow::Render() {
             };
 
         draw_scrolling_line(
-            primary_text_, primary_font, top, primary_color);
+            primary_text_, lyric_font, top, primary_color);
         if (use_secondary) {
             draw_scrolling_line(
                 secondary_text_,
-                secondary_font,
+                lyric_font,
                 top + primary_height + line_gap,
                 secondary_color);
         }

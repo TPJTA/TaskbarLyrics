@@ -175,6 +175,16 @@ bool PublishHostBridgeMessage(std::wstring_view message) {
     if (fields.size() >= 9) {
         next.translation = DecodeComponent(fields[8]);
     }
+    // Per-direction navigation availability (requirements.md). Older/partial
+    // messages without these fields fall back to has_track so we never wrongly
+    // disable the buttons when the host hasn't reported a definite answer.
+    if (fields.size() >= 11) {
+        next.has_previous = fields[9] == L"1";
+        next.has_next = fields[10] == L"1";
+    } else {
+        next.has_previous = next.has_track;
+        next.has_next = next.has_track;
+    }
 
     {
         std::scoped_lock lock(snapshot_mutex);

@@ -181,7 +181,10 @@ constexpr wchar_t bridge_script[] = LR"JS(
     }
 
     if (!stateApi) {
-      document.title = "__TASKBAR_LYRICS_V1__|loading|0|0|0|||5000||";
+      // No NetEase player store in this frame (e.g. a login popup, devtools, or
+      // another embedded webview): do NOT publish, so a non-player browser
+      // cannot overwrite the real player's snapshot. The lyric window already
+      // shows its default loading state until the player frame publishes.
       return;
     }
 
@@ -212,6 +215,30 @@ constexpr wchar_t bridge_script[] = LR"JS(
     var lyric = state["async:lyric"];
     var track = playing.curPlaying || playing.curTrack || playing.curVoice;
     var hasTrack = !!(track || playing.resourceTrackId || playing.onlineResourceId);
+)JS"
+    // MSVC caps a single string literal at 16380 chars (C2026), so the bridge
+    // script is authored as two adjacent raw literals that the compiler
+    // concatenates into one array. The split point is arbitrary JS whitespace.
+    LR"JS(
+    // Per-direction navigation availability. Best-effort: if the playing list is
+    // discoverable and has at most one track, previous/next are unavailable.
+    // When the list shape cannot be read we fall back to hasTrack so the buttons
+    // are never wrongly disabled (NetEase normally wraps around the playlist).
+    var hasPrev = hasTrack;
+    var hasNext = hasTrack;
+    try {
+      var playingList = state.playingList || state["playingList"] || {};
+      var navList =
+        playingList.list ||
+        playingList.tracks ||
+        playingList.trackIds ||
+        (playingList.playlist && playingList.playlist.tracks);
+      if (Array.isArray(navList)) {
+        var multiTrack = navList.length > 1;
+        hasPrev = hasTrack && multiTrack;
+        hasNext = hasTrack && multiTrack;
+      }
+    } catch (_) {}
     var songId = String(
       playing.resourceTrackId ||
       playing.onlineResourceId ||
@@ -333,10 +360,15 @@ constexpr wchar_t bridge_script[] = LR"JS(
       encode(lineKey),
       String(durationMs),
       encode(primary),
-      encode(translation)
+      encode(translation),
+      hasPrev ? "1" : "0",
+      hasNext ? "1" : "0"
     ].join("|");
   } catch (error) {
-    document.title = "__TASKBAR_LYRICS_V1__|failed|0|0|0|||5000||";
+    // Swallow: only a frame that successfully read the player store should
+    // publish. A genuine lyric-load failure is surfaced by the host-side
+    // loading timeout, rather than letting an arbitrary frame post "failed"
+    // and stomp the real player's snapshot.
   }
 })();
 )JS";

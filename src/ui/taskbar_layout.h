@@ -30,6 +30,11 @@ public:
     // monitor covers it entirely (true fullscreen), so the lyrics should hide.
     bool ForegroundIsFullScreen(HWND lyric_window) const;
 
+    // Releases the cached UI Automation interface. Must be called while the
+    // owning thread's COM apartment is still initialized (i.e. before
+    // CoUninitialize), otherwise the destructor would release it afterward.
+    void ReleaseAutomation();
+
 private:
     bool EnsureAutomation();
     std::vector<RECT> OccupiedRegions(HWND taskbar, const RECT& taskbar_rect);
